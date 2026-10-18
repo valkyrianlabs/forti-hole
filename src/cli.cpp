@@ -12,6 +12,7 @@
 
 #include <forti/engine/profile.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <format>
@@ -339,6 +340,10 @@ namespace fh {
             json feeds = json::array();
             std::string text = device_text(inventory) + "\nforti-hole feeds\n";
             int exit = 0;
+            auto journal = load_journal(ctx.env.home);
+            auto in_doubt = [&](const std::string& name) {
+                return journal && (journal->feeds.empty() || std::find(journal->feeds.begin(), journal->feeds.end(), name) != journal->feeds.end());
+            };
             for (const auto& feed: inventory.feeds) {
                 if (!feed.owned) continue;
                 auto record = state.feeds.find(feed.name);
@@ -346,7 +351,9 @@ namespace fh {
                 std::string verdict;
                 std::uint64_t accepted = feed.state ? feed.state->accepted : 0;
                 j["device_entries"] = accepted;
-                if (record == state.feeds.end() || !record->second.confirmed) {
+                if (in_doubt(feed.name)) {
+                    verdict = "in doubt: the last sync stopped while changing it (next sync sends it in full)";
+                } else if (record == state.feeds.end() || !record->second.confirmed) {
                     verdict = "unconfirmed (next sync sends it in full)";
                 } else if (!feed.state || accepted != record->second.lines || feed.state->last_update != record->second.device_update) {
                     verdict = std::format("differs from the confirmed {} entries", grouped(record->second.lines));
@@ -378,7 +385,7 @@ namespace fh {
             if (refs.empty()) text += "  none: no traffic is filtered by forti-hole yet (`forti-hole attach`)\n";
             for (const auto& r: refs) text += std::format("  policy {} ({}) uses {}\n", r["target"].dump(), r.value("name", ""), r["profile"].get<std::string>());
             if (state.paused) text += std::format("\nPaused since {}\n", state.paused_at);
-            if (load_journal(ctx.env.home)) text += "\nThe last sync did not finish; the next one re-sends its feeds.\n";
+            if (journal) text += "\nThe last sync did not finish; the next one re-sends its feeds.\n";
             if (!state.last_run.is_null()) text += std::format("\nLast sync {}: exit {}\n", state.last_run.value("at", "?"), state.last_run.value("exit", 0));
             json data = {{"device", device_json(inventory)}, {"feeds", feeds}, {"attached", refs}, {"paused", state.paused}, {"last_run", state.last_run}};
             return ctx.emit(data, text, exit);
@@ -435,7 +442,7 @@ namespace fh {
             json refs = profile_references(*gateway, config);
             if (refs.empty())
                 check("warn", "attachment",
-                      "no firewall policy uses a forti-hole profile: DNS is filtered only on policies DNS queries cross (`forti-hole attach --profile P --policy ID`)");
+                      "no firewall policy uses a forti-hole profile: DNS is filtered only on policies DNS queries cross (`forti-hole attach PROFILE --policy ID`)");
             else
                 check("ok", "attachment", std::format("{} policy(ies) use forti-hole profiles", refs.size()));
             if (!config.enabled) check("info", "enabled", "\"enabled\" is false: sync writes nothing");

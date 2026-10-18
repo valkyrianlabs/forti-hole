@@ -16,9 +16,11 @@
 //   1. create new feeds, set categories, and add new categories to the managed DNS filter profiles
 //      (profiles keep every category they block now until phase 3, so nothing stops being blocked
 //      while names move between feeds);
-//   2. wait for FortiOS to load new feeds, write the journal, then push: snapshots (one request per
-//      feed, at most feeds.max_entries lines) and deltas in chunks (adds before removes, again so a
-//      moving name is never absent);
+//   2. wait for FortiOS to load new feeds, write the journal, then push in rounds: a snapshot is one
+//      request per feed (at most feeds.max_entries lines); a delta sends its additions, then its
+//      removals, in chunks of sync.chunk_entries (additions first, so a name moving between feeds is
+//      never absent). A round holds at most one request per feed and waits until the device has
+//      applied each before the next (FortiOS rejects a push to a feed still applying the last one);
 //   3. verify every pushed feed on the device: the content-update time moved, the accepted count is
 //      the compiled line count, nothing invalid, no overflow, and sampled pages contain only compiled
 //      lines. Only then is the feed's new content recorded as confirmed;
@@ -73,11 +75,15 @@ namespace fh {
         std::vector<ProfileAction> profiles;
         std::map<std::string, int, std::less<>> categories;   // group -> category
         nlohmann::json phase1 = nlohmann::json::array();       // engine operations
-        nlohmann::json pushes = nlohmann::json::array();
+        // Push requests in rounds: at most one request per feed in a round, and a round starts only
+        // when the device has applied the previous one (FortiOS refuses a push to a feed whose last
+        // push it is still applying: "Unable to unlock external resource push file").
+        std::vector<nlohmann::json> push_rounds;
+        std::size_t pushes = 0;   // requests over all rounds
         nlohmann::json phase3 = nlohmann::json::array();
         std::uint64_t lines_after = 0, adds = 0, removes = 0, snapshot_lines = 0;
         std::vector<std::string> notes;
-        [[nodiscard]] bool writes() const { return !phase1.empty() || !pushes.empty() || !phase3.empty(); }
+        [[nodiscard]] bool writes() const { return !phase1.empty() || pushes > 0 || !phase3.empty(); }
     };
 
     class SyncError : public std::runtime_error {

@@ -102,7 +102,7 @@ namespace fh {
         c.profile = string_at(j, "profile", "config");
         c.vdom = string_at(j, "vdom", "config");
         c.prefix = string_at(j, "prefix", "config", "fh-");
-        if (!matches(c.prefix, 2, 8, false) || c.prefix.back() != '-') fail("prefix", "2-8 characters of [a-z0-9_-], ending in '-'");
+        if (!matches(c.prefix, 2, 20, false) || c.prefix.back() != '-') fail("prefix", "2-20 characters of [a-z0-9_-], ending in '-'");
 
         c.tiers = strings_at(j, "tiers", "config");
         if (c.tiers.empty()) fail("tiers", "at least one tier");
@@ -249,7 +249,7 @@ namespace fh {
         if (auto s = j.find("sync"); s != j.end()) {
             allow_keys(*s, {"max_shrink_percent", "chunk_entries", "load_timeout_seconds", "verify_samples", "verify_page", "comment"}, "sync");
             c.sync.max_shrink_percent = number_at(*s, "max_shrink_percent", "sync", 20, 0, 100);
-            c.sync.chunk_entries = static_cast<std::size_t>(number_at(*s, "chunk_entries", "sync", 20000, 100, 200000));
+            c.sync.chunk_entries = static_cast<std::size_t>(number_at(*s, "chunk_entries", "sync", 50000, 100, 200000));
             c.sync.load_timeout_seconds = static_cast<int>(number_at(*s, "load_timeout_seconds", "sync", 120, 5, 3600));
             c.sync.verify_samples = static_cast<std::size_t>(number_at(*s, "verify_samples", "sync", 3, 0, 1000));
             c.sync.verify_page = static_cast<std::size_t>(number_at(*s, "verify_page", "sync", 500, 1, 10000));

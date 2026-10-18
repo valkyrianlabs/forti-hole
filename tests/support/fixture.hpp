@@ -116,7 +116,7 @@ namespace fh::test {
                    {"auto", {"medium", "mini"}}}}},
                 {"profiles", {{"home", {{"tiers", {"base", "threat"}}}}, {"kids", {{"tiers", {"base"}}}}}},
                 {"feeds", {{"max_entries", 1000}}},
-                {"sync", {{"chunk_entries", 300}, {"load_timeout_seconds", 30}}}};
+                {"sync", {{"chunk_entries", 120}, {"load_timeout_seconds", 30}}}};
     }
 
     struct Harness {

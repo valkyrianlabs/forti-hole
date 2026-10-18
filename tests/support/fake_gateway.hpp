@@ -56,6 +56,10 @@ namespace fh::test {
         // Fault injection.
         int fail_push_after = -1;          // fail the n-th push request (0-based) of the next apply
         bool drop_pushes = false;          // accept pushes but change nothing (a device that lost them)
+        // FortiOS applies a push asynchronously and refuses another push to the same feed until it has
+        // ("Unable to unlock external resource push file"). Here a push "applies" once its feed's
+        // status has been read after it.
+        std::set<std::string, std::less<>> applying;
         std::vector<json> applied;         // every operation applied, in order
         std::size_t plans = 0, applies = 0, push_requests = 0, writes = 0;
 
@@ -128,6 +132,10 @@ namespace fh::test {
             for (std::size_t i = 0; i < ops.size(); ++i) {
                 const auto& op = ops[i];
                 if (op.value("op", "") == "action") {
+                    for (const auto& command: op["body"]["commands"])
+                        if (applying.contains(command.value("name", std::string())))
+                            return error("partial_failure", std::format("operation {} failed: Unable to unlock external resourch push file.", i),
+                                         {{"operations", records}});
                     if (fail_push_after >= 0 && push_index == fail_push_after) {
                         fail_push_after = -1;
                         return error("partial_failure", std::format("fake: push {} failed", i), {{"operations", records}});
@@ -146,6 +154,7 @@ namespace fh::test {
             auto it = feeds.find(name);
             if (it == feeds.end()) throw GatewayError({{"code", "api"}, {"message", "no such feed"}});
             auto& f = it->second;
+            applying.erase(std::string(name));
             FeedStatus s;
             if (f.pending_reads > 0) {
                 --f.pending_reads;
@@ -217,6 +226,7 @@ namespace fh::test {
                     if (it == feeds.end()) continue;
                     auto& f = it->second;
                     if (f.pending_reads > 0 || drop_pushes) continue;   // FortiOS drops it and still says success
+                    applying.insert(command.value("name", std::string()));
                     std::string verb = command.value("command", "");
                     std::vector<std::string> entries = command.value("entries", std::vector<std::string>{});
                     if (verb == "snapshot") f.entries.clear();
@@ -263,6 +273,14 @@ namespace fh::test {
                 return {};
             }
             if (resource == "dnsfilter/profile") {
+                // FortiOS: a remote category (192-221) is valid in a profile only while a feed provides it.
+                const json& body = kind == "create" ? op["object"] : op.value("set", json::object());
+                if (body.contains("ftgd-dns"))
+                    for (const auto& f: body["ftgd-dns"].value("filters", json::array())) {
+                        int c = f.value("category", 0);
+                        bool fed = std::any_of(feeds.begin(), feeds.end(), [&](const auto& p) { return p.second.object.value("category", 0) == c; });
+                        if (c >= 192 && c <= 221 && !fed) return std::format("Error: category '{}' is not a valid category ID.", c);
+                    }
                 if (kind == "create") profiles[op["object"]["name"].get<std::string>()] = op["object"];
                 else if (kind == "update") {
                     auto it = profiles.find(key);

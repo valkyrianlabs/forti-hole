@@ -97,7 +97,7 @@ namespace fh {
         // A source whose parsed entries drop by more than this against its last good copy is
         // rejected and the last good copy is used (a truncated or broken upstream).
         double max_shrink_percent = 20;
-        std::size_t chunk_entries = 20000;     // entries per push request
+        std::size_t chunk_entries = 50000;     // entries per delta push request (a snapshot is one request per feed)
         int load_timeout_seconds = 120;        // waiting for FortiOS to load a new feed or apply a push
         std::size_t verify_samples = 3;        // pages sampled per changed feed after a push
         std::size_t verify_page = 500;

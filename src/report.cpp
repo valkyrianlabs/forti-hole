@@ -178,7 +178,7 @@ namespace fh {
                     continue;
                 }
                 out += std::format("  {} {}: {} lines, {}{}\n", a.source_id, a.variant, grouped(a.lines), a.budget.fits() ? "fits" : "does not fit: " + a.budget.reason(),
-                                   a.chosen ? "  <- chosen" : "");
+                                   a.chosen ? (a.budget.fits() ? "  <- chosen" : "  <- last candidate") : "");
             }
         }
         const auto& b = run.budget;
@@ -222,7 +222,7 @@ namespace fh {
                 {"profiles", profiles},
                 {"categories", plan.categories},
                 {"requests",
-                 {{"configuration", plan.phase1.size()}, {"pushes", plan.pushes.size()}, {"cleanup", plan.phase3.size()}}},
+                 {{"configuration", plan.phase1.size()}, {"pushes", plan.pushes}, {"push_rounds", plan.push_rounds.size()}, {"cleanup", plan.phase3.size()}}},
                 {"lines_after", plan.lines_after},
                 {"snapshot_lines", plan.snapshot_lines},
                 {"adds", plan.adds},
@@ -249,7 +249,7 @@ namespace fh {
         if (!plan.writes()) out += "\nNothing to write: the device already holds the compiled set.\n";
         else
             out += std::format("\nRequests: {} configuration, {} push ({} snapshot lines, {} additions, {} removals), {} cleanup\n", plan.phase1.size(),
-                               plan.pushes.size(), grouped(plan.snapshot_lines), grouped(plan.adds), grouped(plan.removes), plan.phase3.size());
+                               plan.pushes, grouped(plan.snapshot_lines), grouped(plan.adds), grouped(plan.removes), plan.phase3.size());
         for (const auto& note: plan.notes) out += "note: " + note + "\n";
         return out;
     }

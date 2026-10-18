@@ -118,6 +118,20 @@ TEST(Sync, ListChangesArePushedAsDeltas) {
     for (const auto& v: result["data"]["outcome"]["verification"]) EXPECT_TRUE(v["verified"].get<bool>());
 }
 
+TEST(Sync, LargeDeltasGoOutInRoundsTheDeviceCanApply) {
+    Harness h;
+    h.write_config(small_config());   // chunk_entries 120
+    ASSERT_EQ(h.run({"sync"}), 0) << h.err.str();
+    h.lists.pages["https://lists.test/hosts"] = {200, hosts_list(300, 700), "\"h3\""};   // 300 gone, 300 new
+    auto result = h.run_json({"sync"});
+    ASSERT_EQ(result["ok"], true) << h.out.str();
+    EXPECT_GT(result["data"]["plan"]["requests"]["push_rounds"].get<int>(), 1);
+    for (const auto& v: result["data"]["outcome"]["verification"]) EXPECT_TRUE(v["verified"].get<bool>()) << v.dump();
+    auto lines = device_lines(h.device);
+    EXPECT_TRUE(lines.contains("h699.example"));
+    EXPECT_FALSE(lines.contains("h299.example"));
+}
+
 TEST(Sync, AFailedDownloadKeepsTheDeviceAsItIs) {
     Harness h;
     h.write_config(small_config());
@@ -179,6 +193,20 @@ TEST(Sync, AnInterruptedPushIsRecoveredByTheNextRun) {
     EXPECT_FALSE(load_journal(h.temp.home));
     for (const auto& v: result["data"]["outcome"]["verification"]) EXPECT_TRUE(v["verified"].get<bool>());
     EXPECT_EQ(device_line_count(h.device), result["data"]["compile"]["totals"]["emitted_lines"].get<std::size_t>());
+}
+
+TEST(Sync, ARunThatDiedBeforeSavingKeepsTheDevicesCategories) {
+    Harness h;
+    h.write_config(small_config());
+    ASSERT_EQ(h.run({"sync"}), 0);
+    std::map<std::string, int> before;
+    for (const auto& [name, feed]: h.device.feeds) before[name] = feed.object["category"];
+    // Killed after the device changed but before state.json was written.
+    write_private(h.temp.home.state(), "{}");
+    write_private(h.temp.home.journal(), R"({"phase":"push","feeds":[]})");
+    ASSERT_EQ(h.run({"sync"}), 0) << h.err.str();
+    for (const auto& [name, feed]: h.device.feeds) EXPECT_EQ(feed.object["category"], before[name]) << name;
+    EXPECT_FALSE(load_journal(h.temp.home));
 }
 
 TEST(Sync, PushesTheDeviceDroppedFailVerification) {

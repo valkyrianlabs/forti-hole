@@ -91,6 +91,20 @@ namespace fh {
                 plan.categories[label] = it->second.category;
                 taken.insert(it->second.category);
             }
+        // A group whose feeds are already on the device keeps their category even when state.json
+        // does not know it (a run that stopped before saving): recategorizing them would leave the
+        // profiles listing a category no feed provides, which FortiOS refuses.
+        for (const auto& feed: inventory.feeds) {
+            if (!feed.owned || !feed.name.starts_with(config.prefix)) continue;
+            std::string_view rest = std::string_view(feed.name).substr(config.prefix.size());
+            auto dash = rest.rfind('-');
+            if (dash == std::string_view::npos) continue;
+            std::string label(rest.substr(0, dash));
+            if (!labels.contains(label) || plan.categories.contains(label) || taken.contains(feed.category)) continue;
+            if (feed.category < config.feeds.category_min || feed.category > config.feeds.category_max) continue;
+            plan.categories[label] = feed.category;
+            taken.insert(feed.category);
+        }
         // Categories still on the device for groups that are going away stay reserved until phase 3.
         std::set<int> ours_anywhere;
         for (const auto& [label, group]: state.groups) ours_anywhere.insert(group.category);
@@ -206,10 +220,15 @@ namespace fh {
             plan.phase3.push_back({{"op", "delete"}, {"resource", "system/external-resource"}, {"key", device.name}});
         }
 
+        // The categories some feed provides once phase 1 has run: every compiled group's, and those of
+        // feeds that are only deleted in phase 3. A profile may list no other remote category.
+        std::set<int> provided;
+        for (const auto& [label, category]: plan.categories) provided.insert(category);
+        for (const auto& action: plan.feeds)
+            if (action.kind == FeedAction::Kind::remove) provided.insert(action.category);
+
         // Managed DNS filter profiles.
         if (config.dnsfilter.manage_profiles) {
-            std::set<int> phase1_extra;   // forti-hole categories the device's profiles block now
-            for (int category: ours_anywhere) phase1_extra.insert(category);
             for (std::size_t p = 0; p < config.profiles.size(); ++p) {
                 const auto& spec = config.profiles[p];
                 std::string name = dnsfilter_profile_name(config, spec.name);
@@ -223,7 +242,7 @@ namespace fh {
                 std::set<int> now;
                 if (device)
                     for (const auto& [category, verb]: device->remote_categories)
-                        if (ours_anywhere.contains(category) && verb == "block") now.insert(category);
+                        if (ours_anywhere.contains(category) && verb == "block" && provided.contains(category)) now.insert(category);
                 // Phase 1 keeps what it blocks now (of forti-hole's) and adds the new; phase 3 is exact.
                 std::set<int> transitional = wanted;
                 transitional.insert(now.begin(), now.end());
@@ -268,14 +287,35 @@ namespace fh {
             }
         }
 
-        // Pushes: snapshots (new feeds first), then every add, then every remove.
-        for (const auto& action: plan.feeds)
-            if (action.kind == FeedAction::Kind::create || action.kind == FeedAction::Kind::snapshot)
-                plan.pushes.push_back(push_op(action.feed, "snapshot", action.compiled->lines.begin(), action.compiled->lines.end()));
-        for (const auto& action: plan.feeds)
-            if (action.kind == FeedAction::Kind::delta) push_chunks(plan.pushes, action.feed, "add", action.adds, config.sync.chunk_entries);
-        for (const auto& action: plan.feeds)
-            if (action.kind == FeedAction::Kind::delta) push_chunks(plan.pushes, action.feed, "remove", action.removes, config.sync.chunk_entries);
+        // Pushes: per feed a queue of requests (a snapshot; or additions, then removals, in chunks);
+        // round r takes the r-th request of every queue. New feeds come first.
+        std::vector<std::vector<json>> queues;
+        for (int pass = 0; pass < 2; ++pass)
+            for (const auto& action: plan.feeds) {
+                // Pass 0: new feeds. Pass 1: snapshots of existing feeds and deltas.
+                bool wanted = pass == 0 ? action.kind == FeedAction::Kind::create
+                                        : action.kind == FeedAction::Kind::snapshot || action.kind == FeedAction::Kind::delta;
+                if (!wanted) continue;
+                bool snapshot = action.kind != FeedAction::Kind::delta;
+                std::vector<json> queue;
+                if (snapshot) {
+                    queue.push_back(push_op(action.feed, "snapshot", action.compiled->lines.begin(), action.compiled->lines.end()));
+                } else {
+                    json requests = json::array();
+                    push_chunks(requests, action.feed, "add", action.adds, config.sync.chunk_entries);
+                    push_chunks(requests, action.feed, "remove", action.removes, config.sync.chunk_entries);
+                    for (auto& request: requests) queue.push_back(std::move(request));
+                }
+                if (!queue.empty()) queues.push_back(std::move(queue));
+            }
+        for (std::size_t round = 0;; ++round) {
+            json ops = json::array();
+            for (const auto& queue: queues)
+                if (round < queue.size()) ops.push_back(queue[round]);
+            if (ops.empty()) break;
+            plan.pushes += ops.size();
+            plan.push_rounds.push_back(std::move(ops));
+        }
 
         // Profiles must stop blocking a category before its last feed is deleted: phase 3 lists the
         // profile updates first.
@@ -302,6 +342,17 @@ namespace fh {
         if (applied.value("ok", false)) return applied["data"];
         const auto& error = applied["error"];
         std::string code = error.value("code", std::string("internal")), message = error.value("message", std::string("?"));
+        // The engine's per-operation record says which operation failed and what the device answered.
+        if (error.contains("details") && error["details"].is_object()) {
+            const auto& details = error["details"];
+            for (const auto& record: details.value("operations", json::array())) {
+                if (!record.is_object() || record.value("status", std::string()) != "failed") continue;
+                std::string why;
+                if (record.contains("error") && record["error"].is_object()) why = record["error"].value("message", std::string());
+                message += std::format(" (operation {} failed{}{})", record.value("index", 0), why.empty() ? "" : ": ", why);
+                break;
+            }
+        }
         if (code == "approval_required")
             throw SyncError(std::format("waiting for approval of plan {}: run `forti approve {}`, then sync again", id, id), 7);
         if (code == "policy_denied") throw SyncError(std::format("the forti profile does not allow changes ({}); plan {} was not applied", message, id), 7);
@@ -349,19 +400,17 @@ namespace fh {
             v.verified = true;
             return v;
         }
-        if (full) {
+        std::size_t pages = std::max<std::size_t>(1, config.sync.verify_samples);
+        std::size_t page = std::max<std::size_t>(1, config.sync.verify_page);
+        // A feed no larger than the sample is read whole; so is every feed with `full`.
+        if (full || expected.size() <= pages * page) {
             for (std::size_t start = 0; start < expected.size(); start += 5000) check_page(start, 5000);
+            if (v.sampled != expected.size() && v.problem.empty())
+                v.problem = std::format("read back {} entries, expected {}", v.sampled, expected.size());
         } else {
-            std::size_t pages = std::max<std::size_t>(1, config.sync.verify_samples);
-            std::size_t page = std::min(config.sync.verify_page, expected.size());
-            for (std::size_t i = 0; i < pages; ++i) {
-                std::size_t start = expected.size() <= page ? 0 : (expected.size() - page) * i / std::max<std::size_t>(1, pages - 1);
-                check_page(start, page);
-                if (expected.size() <= page) break;
-            }
+            for (std::size_t i = 0; i < pages; ++i) check_page((expected.size() - page) * i / std::max<std::size_t>(1, pages - 1), page);
         }
         if (v.sample_mismatches > 0) v.problem = std::format("{} of {} sampled entries are not in the compiled feed", v.sample_mismatches, v.sampled);
-        else if (full && v.sampled != expected.size()) v.problem = std::format("read back {} entries, expected {}", v.sampled, expected.size());
         v.verified = v.problem.empty();
         return v;
     }
@@ -418,20 +467,41 @@ namespace fh {
                 }
             }
 
-            // Phase 2: pushes.
-            if (!plan.pushes.empty()) {
+            // Phase 2: pushes, round by round.
+            if (plan.pushes > 0) {
                 journal.phase = "push";
                 save_journal(home, journal);
-                say(std::format("Pushing {} request(s): {} snapshot lines, {} additions, {} removals...", plan.pushes.size(), plan.snapshot_lines,
-                                plan.adds, plan.removes));
-                std::string id;
-                try {
-                    apply_operations(gateway, config, plan.pushes, permits, {}, &id);
-                } catch (...) {
+                say(std::format("Pushing {} request(s) in {} round(s): {} snapshot lines, {} additions, {} removals...", plan.pushes,
+                                plan.push_rounds.size(), plan.snapshot_lines, plan.adds, plan.removes));
+                std::map<std::string, std::int64_t, std::less<>> updated;   // feed -> last_content_update_time seen
+                for (const auto& action: plan.feeds) updated[action.feed] = action.last_update_before;
+                for (std::size_t r = 0; r < plan.push_rounds.size(); ++r) {
+                    const auto& round = plan.push_rounds[r];
+                    if (r > 0) {
+                        // The previous round's feeds must have applied before they are pushed again.
+                        for (const auto& op: plan.push_rounds[r - 1]) {
+                            std::string feed = op["body"]["commands"][0]["name"];
+                            auto deadline = clock.now() + config.sync.load_timeout_seconds;
+                            while (true) {
+                                FeedStatus status = gateway.feed_status(feed);
+                                if (status.last_update > updated[feed]) {
+                                    updated[feed] = status.last_update;
+                                    break;
+                                }
+                                if (clock.now() >= deadline) break;   // verification decides
+                                clock.sleep(1000);
+                            }
+                        }
+                    }
+                    std::string id;
+                    try {
+                        apply_operations(gateway, config, round, permits, {}, &id);
+                    } catch (...) {
+                        record_plan(id);
+                        throw;
+                    }
                     record_plan(id);
-                    throw;
                 }
-                record_plan(id);
             }
 
             // Phase 3 (verification) of every feed that was pushed.
