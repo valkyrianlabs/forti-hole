@@ -1,0 +1,13 @@
+# forti-cli provides forti-engine, the command engine forti-hole links statically. Only the engine
+# is built when forti-cli is a subproject. For co-development, replace subprojects/forti-cli with a
+# checkout or a symlink to ../forti-cli; Meson then uses it instead of downloading.
+[wrap-git]
+url = https://github.com/valkyrianlabs/forti-cli.git
+# Pinned to forti-cli v0.6.0 (content-addressed action bodies, action replies), a release commit (full id; package builds use exactly this revision). After
+# changing it, run `packaging/forti-cli-pin.sh update` (the Homebrew formula's forti-cli resource) and
+# commit both (.claude/context/release.md, "Engine source").
+revision = 13b7dfed99772ad20ff0e6744a5224cc63f38880
+depth = 1
+
+[provide]
+forti-engine = forti_engine_dep

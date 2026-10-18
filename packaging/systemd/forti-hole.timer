@@ -1,0 +1,16 @@
+# Runs forti-hole.service twice a day (a systemd *user* timer). Never enabled by the package; opt in
+# with: systemctl --user enable --now forti-hole.timer
+[Unit]
+Description=Sync DNS blocklists to FortiGate threat feeds twice a day
+Documentation=https://github.com/valkyrianlabs/forti-hole
+
+[Timer]
+OnCalendar=*-*-* 04,16:00:00
+# A run missed while the machine was off or asleep happens once at the next opportunity.
+Persistent=true
+# Spread out so many installations do not hit the list servers at the same minute.
+RandomizedDelaySec=45min
+AccuracySec=5min
+
+[Install]
+WantedBy=timers.target
