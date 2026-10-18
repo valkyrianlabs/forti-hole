@@ -10,9 +10,3 @@ compile_commands.json
 *.iml
 .env
 .claude/worktrees/
-# Legacy (forti-hole 0.x) local files: credentials and certificates, never tracked.
-config.yaml
-*config.yaml
-.ssl/
-*ssl
-/~/

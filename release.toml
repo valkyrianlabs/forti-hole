@@ -32,13 +32,9 @@ pre_build = [["bash", "packaging/forti-cli-pin.sh", "vendor"]]
 build_command = ["dpkg-buildpackage", "-us", "-uc", "-b"]
 # build-deb copies the work tree, not a Git commit (Git metadata never comes along): never let
 # credentials, local tooling state, a co-development forti-api checkout or a Meson package cache into
-# the build tree. config.yaml and .ssl/ are forti-hole 0.x's local credentials and certificates
-# (never tracked; an operator's checkout may still have them).
+# the build tree.
 build_excludes = [
   ".env",
-  "config.yaml",
-  ".ssl",
-  "~",
   ".certs",
   ".idea",
   ".claude",
