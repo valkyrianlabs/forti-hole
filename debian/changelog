@@ -1,0 +1,30 @@
+forti-hole (1.0.0-1) unstable; urgency=medium
+
+  * Program
+    - Rewrite of forti-hole in C++23 on forti-api 1.3 and the forti engine
+      (forti-cli 0.6.0, compiled in): /usr/bin/forti-hole with setup, doctor,
+      compile, plan, sync, status, pause, resume, attach, detach, remove,
+      import pihole and migrate.
+    - List pipeline: parallel conditional downloads (https, file), plausibility
+      checks (HTML, declared counts, shrink guard) with a last good copy;
+      adblock, hosts, domains, wildcard and subtree-domains parsers; canonical
+      names with punycode; deduplication across sources and tiers; subtree
+      collapse; allow, regex allow and block entries; strict and opt-in compact
+      FortiOS encodings; deterministic feeds with SHA-256 and stable hash
+      partitions.
+    - Budgets: the device-wide domain-entry limit and predicted memory (learned
+      bytes per line, red threshold), checked on the compiled set; hagezi TIF
+      variant selection (auto: medium, else mini).
+    - Sync: push-mode feeds and DNS filter profiles with an ownership marker,
+      categories kept per group, deltas in rounds of one request per feed,
+      verification by counts and sampled entries, a journal for interrupted
+      runs, obsolete feeds removed after their replacements verify.
+    - Safety: a two-layer write allowlist (operation check and a guard
+      transport under the engine); operator objects are never modified;
+      policies change only with attach/detach.
+  * Packaging
+    - Debian package (amd64) and Homebrew formula; systemd user service and
+      timer (installed, never enabled); launchd template; agent skill; example
+      configuration.
+
+ -- Cooper Larson <cooper@valkyrianlabs.com>  Sun, 18 Oct 2026 16:19:19 +0000
