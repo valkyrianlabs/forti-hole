@@ -1,3 +1,5 @@
+![forti-hole](https://media.valkyrianlabs.com/forti-hole.png)
+
 # forti-hole
 
 **DNS blocklists as FortiGate threat feeds, deduplicated, budgeted and verified.**
