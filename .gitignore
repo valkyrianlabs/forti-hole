@@ -1,8 +1,18 @@
-.env
-build
+build/
+release/
+subprojects/*
+!subprojects/*.wrap
+!subprojects/packagefiles/
+compile_commands.json
+.cache/
+.DS_Store
 .idea
 *.iml
-*.xml
+.env
+.claude/worktrees/
+# Legacy (forti-hole 0.x) local files: credentials and certificates, never tracked.
+config.yaml
 *config.yaml
+.ssl/
 *ssl
-*venv
+/~/

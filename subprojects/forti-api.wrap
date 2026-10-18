@@ -1,0 +1,11 @@
+# forti-api (header-only SDK). System installs (libforti-api-dev, Homebrew forti-api) are preferred;
+# this wrap is the fallback for source builds. For SDK co-development, replace subprojects/forti-api
+# with a checkout (or a symlink to ../forti-api) and Meson uses it instead of downloading.
+# forti-hole needs the feed status and paging helpers of forti-api 1.3.0 (threat_feed.hpp).
+[wrap-git]
+url = https://github.com/valkyrianlabs/forti-api.git
+revision = v1.3.0
+depth = 1
+
+[provide]
+forti-api = forti_api_dep

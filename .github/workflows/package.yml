@@ -1,0 +1,112 @@
+# Manual packaging rehearsal: the Debian package and the Homebrew formula built -O3 as released, and
+# tested as built. Never on pull requests (ci.yml: one -O0 build per job); release.yml runs the same
+# steps for a tagged release.
+name: Package
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  VL_RELEASE_TAG: v0.5.1
+  # Stock image for clean-install smoke tests (same digest as ci/Containerfile's base).
+  UBUNTU_IMAGE: docker.io/library/ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55
+
+jobs:
+  package:
+    name: Release contract and Debian rehearsal
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && fromJSON('["ubuntu-latest"]') || fromJSON('["self-hosted","Linux","X64","ubuntu-latest-lts"]') }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash ./ci/run-ci bash -euo pipefail {0}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Repository contract
+        id: state
+        run: |
+          vlr check
+          vlr install-skill --check
+          vlr status --github-output
+
+      # A full local release in this ephemeral checkout; nothing is published. `vlr build-deb` first
+      # puts forti-cli at the wrap's revision into subprojects/forti-cli (release.toml pre_build).
+      # Between releases (version not bumped yet) the rehearsal bumps the version in this ephemeral
+      # checkout only, so every PR still builds and validates the package.
+      - name: Release rehearsal
+        if: contains(fromJSON('["pending","prepared","unbumped"]'), steps.state.outputs.phase)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libforti-api-dev
+          dpkg-checkbuilddeps
+          if [ "${{ steps.state.outputs.phase }}" = unbumped ]; then vlr version bump minor; fi
+          vlr prepare
+          jobs="$(ci/build-jobs)"   # memory-aware: every core the memory allows
+          export DEB_BUILD_OPTIONS="parallel=$jobs"
+          vlr build-deb
+          vlr source-archive
+          vlr homebrew formula
+          vlr checksums
+          vlr validate-artifacts
+
+      # Install the built .deb into a clean, stock Ubuntu 24.04 (container root, no host access): it
+      # must pull its runtime dependencies (libcurl) from the Ubuntu archive alone, work offline, and
+      # report the engine revision the wrap pins.
+      - name: Clean-install smoke test of the built package
+        if: contains(fromJSON('["pending","prepared","unbumped"]'), steps.state.outputs.phase)
+        shell: bash
+        run: |
+          # shellcheck disable=SC2016  # expanded inside the container
+          ./ci/run-ci --image "$UBUNTU_IMAGE" --root bash -euo pipefail -c '
+            apt-get update
+            apt-get install -y --no-install-recommends ./release/forti-hole_*_amd64.deb
+            pinned="$(sed -n "s/^revision *= *//p" subprojects/forti-cli.wrap | cut -c1-7)"
+            /usr/bin/forti-hole --version | grep -F "(engine forti-cli $pinned, forti-api "
+            ci/smoke-test.sh /usr/bin/forti-hole
+            # The user units ship, and installing the package never enables them.
+            test -f /usr/lib/systemd/user/forti-hole.service
+            test -f /usr/lib/systemd/user/forti-hole.timer
+            test ! -e /etc/systemd/user/timers.target.wants/forti-hole.timer
+          '
+
+  homebrew:
+    name: Homebrew formula (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      # vl-release from its pinned release tag (pure Python, no install needed).
+      - name: vl-release
+        run: |
+          git clone --quiet --depth 1 --branch "$VL_RELEASE_TAG" https://github.com/valkyrianlabs/vl-release.git "$RUNNER_TEMP/vl-release"
+          echo "$RUNNER_TEMP/vl-release/bin" >> "$GITHUB_PATH"
+
+      - name: Homebrew formula
+        run: |
+          phase="$(vlr status --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["phase"])')"
+          case "$phase" in
+            pending | prepared | unbumped) ;;
+            *) echo "release phase $phase: no staged release docs, skipping the formula install"; exit 0 ;;
+          esac
+          # As release.yml: a bottle build needs its dependencies installed already; those without
+          # bottles of their own (forti-api) are built from source here (brew install --build-bottle
+          # refuses to do it), and the published tap's forti-hole is removed from this runner's
+          # clone so `brew bottle` does not find the formula in two taps.
+          brew install meson ninja pkgconf
+          brew tap valkyrianlabs/tap
+          if brew commands --quiet | grep -qx trust; then brew trust valkyrianlabs/tap; fi
+          HOMEBREW_NO_AUTO_UPDATE=1 brew install --build-from-source valkyrianlabs/tap/forti-api
+          rm -f "$(brew --repository valkyrianlabs/tap)/Formula/forti-hole.rb"
+          bash .github/scripts/homebrew-local-install.sh

@@ -1,0 +1,46 @@
+#!/usr/bin/make -f
+# forti-hole against the system forti-api (libforti-api-dev), with the engine compiled from
+# subprojects/forti-cli: forti-cli at exactly the revision subprojects/forti-cli.wrap pins, put there and
+# verified by `packaging/forti-cli-pin.sh vendor` before the build (release.toml debian.pre_build).
+# --wrap-mode=nodownload keeps the build offline: a missing engine source, or a missing or too-old
+# libforti-api-dev, fails the build instead of fetching anything (the forti-api wrap is never used).
+#
+# Release profile (.claude/context/release.md, "Build profile"), as in forti-cli and forti-mcp:
+# debhelper configures meson with buildtype=plain and dpkg-buildflags (hardening on), so meson.build's
+# release optimization (-O3) is applied here in place of dpkg's -O2, and NDEBUG explicitly
+# (b_ndebug=if-release does not fire for buildtype=plain). meson.build adds -ffunction-sections
+# -fdata-sections -Wl,--gc-sections for non-debug ELF builds. debhelper strips it; no -dbgsym package ships.
+
+# Ubuntu's dpkg defaults add -flto=auto -ffat-lto-objects and -g. Neither is needed (fat LTO compiles
+# everything twice and re-optimizes the whole program at link), and the binary is stripped with no
+# debug package shipped, so both are off: -O3 as built is what is tested.
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all optimize=-lto
+export DEB_CXXFLAGS_MAINT_STRIP = -O2 -g
+export DEB_CXXFLAGS_MAINT_APPEND = -O3
+
+include /usr/share/dpkg/architecture.mk
+
+%:
+	dh $@ --buildsystem=meson
+
+# meson.build already builds the forti-cli subproject without `forti` (subproject_cli=false).
+override_dh_auto_configure:
+	dh_auto_configure -- --wrap-mode=nodownload -Db_ndebug=true \
+		-Dtests=$(if $(filter nocheck,$(DEB_BUILD_OPTIONS) $(DEB_BUILD_PROFILES)),disabled,enabled)
+
+# Every suite: all of them are network-free (in-memory FortiGate, the mock FortiOS on 127.0.0.1,
+# temporary forti homes).
+override_dh_auto_test:
+ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
+	meson test -C obj-$(DEB_HOST_GNU_TYPE) --print-errorlogs
+endif
+
+# The systemd user units are installed by meson (usr/lib/systemd/user) but must never be enabled by
+# the package: syncing a FortiGate is an operator's decision, made per user with
+# `systemctl --user enable --now forti-hole.timer`. dh_installsystemduser would enable them for every
+# user, so it does not run.
+override_dh_installsystemduser:
+
+# No -dbgsym package: the build has no debug info (-g is stripped above), so it would be empty.
+override_dh_strip:
+	dh_strip --no-automatic-dbgsym

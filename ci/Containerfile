@@ -1,0 +1,51 @@
+# CI build/test environment for forti-hole (built and run by ci/run-ci; nothing here touches the
+# host). Same base and tooling as forti-mcp's, forti-cli's and forti-api's ci/Containerfile.
+#
+# Ubuntu 24.04 (the release target, GCC 13) with the build dependencies (build-essential, meson,
+# ninja, libcurl, GoogleTest, ccache), openssl (kept from the shared image; python3 comes with meson),
+# shellcheck, git for the forti-cli wrap, the Debian packaging toolchain, the GitHub CLI
+# (`vlr github-release`), and vl-release and pmdocs from the ValkyrianLabs APT repository.
+#
+# libforti-api-dev is deliberately NOT in the image: development builds use the pinned wraps
+# (subprojects/forti-cli.wrap and forti-api.wrap), and a system install would take precedence over the
+# latter. The package jobs install the newest libforti-api-dev from the ValkyrianLabs APT repository
+# (already configured below) at run time, so the image never pins a stale SDK.
+FROM docker.io/library/ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55
+
+# Newest vl-release / pmdocs in the ValkyrianLabs APT index when ci/run-ci built the image; part
+# of the image tag, so a new tool release rebuilds the image.
+ARG VALKYRIANLABS_TOOLS=""
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    HOME=/home/ci \
+    CI=true
+
+# Base and build tools. sudo is for CI steps that want root inside the container; every user in
+# this container may use it, and container root is an unprivileged subordinate uid on the host.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates curl git gnupg sudo \
+      build-essential meson ninja-build pkgconf libcurl4-openssl-dev libgtest-dev ccache openssl shellcheck \
+      dpkg-dev debhelper \
+ && echo 'ALL ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/ci \
+ && chmod 0440 /etc/sudoers.d/ci \
+ && rm -rf /var/lib/apt/lists/*
+
+# GitHub CLI (vlr github-release), vl-release and pmdocs, from their signed APT repositories.
+RUN set -eux; \
+    install -d -m 0755 /etc/apt/keyrings; \
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli.gpg; \
+    curl -fsSL https://apt.valkyrianlabs.com/pubkey.gpg -o /etc/apt/keyrings/valkyrianlabs.gpg; \
+    chmod 0644 /etc/apt/keyrings/*.gpg; \
+    echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/githubcli.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list; \
+    echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/valkyrianlabs.gpg] https://apt.valkyrianlabs.com stable main" > /etc/apt/sources.list.d/valkyrianlabs.list; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends gh vl-release pmdocs; \
+    rm -rf /var/lib/apt/lists/*; \
+    echo "tools: ${VALKYRIANLABS_TOOLS}"; \
+    vlr --version; pmdocs --version; gh --version | head -1
+
+# HOME for whichever host uid ci/run-ci maps in (--userns=keep-id).
+RUN install -d -m 1777 /home/ci
+
+WORKDIR /workspace

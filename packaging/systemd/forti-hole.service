@@ -1,0 +1,17 @@
+# One forti-hole sync (a systemd *user* unit; forti-hole.timer starts it). Installed, never enabled
+# by the package. The sync writes nothing until "enabled": true in ~/.forti/hole/config.json.
+[Unit]
+Description=Sync DNS blocklists to FortiGate threat feeds (forti-hole)
+Documentation=https://github.com/valkyrianlabs/forti-hole
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/forti-hole sync --quiet
+# Exit 7 is "not enabled / paused / waiting for approval": not a failure of the unit.
+SuccessExitStatus=7
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=yes
+PrivateTmp=yes
