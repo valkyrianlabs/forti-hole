@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include <set>
+#include <format>
 
 using namespace fh;
 using namespace fh::test;
