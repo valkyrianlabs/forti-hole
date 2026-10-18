@@ -34,13 +34,18 @@ namespace fh {
             for (const auto& source: config.sources) {
                 if (!source.enabled) continue;
                 std::string variant = source.has_variants() ? variants.at(source.id) : "";
-                const auto& list = required(lists, list_key(source.id, variant));
-                compiler->add_source(list_key(source.id, variant), source.tier, list.text, source.format);
+                std::string key = list_key(source.id, variant);
+                const LoadedList& list = required(lists, key);
+                compiler->add_source(key, source.tier, list.text, source.format);
             }
             for (const auto& block: config.block) compiler->add_block(block.name, block.scope, block.tier);
             for (const auto& allow: config.allow) compiler->add_allow(allow.name, allow.scope, allow.profiles);
             for (const auto& regex: config.allow_regex) compiler->add_allow_regex(regex.pattern, regex.profiles);
-            if (config.encoding == Encoding::compact) compiler->set_reference(required(lists, "reference").text, config.reference.format);
+            if (config.encoding == Encoding::compact) {
+                const std::string key = "reference";
+                const LoadedList& reference = required(lists, key);
+                compiler->set_reference(reference.text, config.reference.format);
+            }
             return compiler;
         }
 

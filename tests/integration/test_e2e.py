@@ -43,7 +43,7 @@ def check(condition: bool, what: str) -> None:
 # ---- the mock, extended -------------------------------------------------------------------------
 
 for path, mkey, numeric in (("system/external-resource", "name", False), ("dnsfilter/profile", "name", False),
-                            ("dnsfilter/domain-filter", "id", True)):
+                            ("dnsfilter/domain-filter", "id", True), ("system/dns-server", "name", False)):
     TABLES.setdefault(path, TableSpec(path, mkey, numeric, f"mock {path}", {}, lambda: {}))
 
 LIMIT = 1_000_000

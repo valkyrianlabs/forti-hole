@@ -119,6 +119,17 @@ namespace fh {
             if (profile.starts_with(config.prefix))
                 refs.push_back({{"kind", "policy"}, {"target", policy.value("policyid", 0)}, {"name", str(policy, "name")}, {"profile", profile}});
         }
+        // The FortiGate's own DNS service can use a profile too (set by the operator; read only here).
+        json servers = json::array();
+        try {
+            servers = read_all(gateway, with_target(config, {{"resource", "system/dns-server"}, {"fields", {"name", "dnsfilter-profile"}}}));
+        } catch (const GatewayError& error) {
+            if (error.code() != "not_found") throw;   // a VDOM without the DNS service table has no references there
+        }
+        for (const auto& server: servers) {
+            std::string profile = str(server, "dnsfilter-profile");
+            if (profile.starts_with(config.prefix)) refs.push_back({{"kind", "dns-server"}, {"target", str(server, "name")}, {"profile", profile}});
+        }
         return refs;
     }
 

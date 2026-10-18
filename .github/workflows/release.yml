@@ -1,0 +1,392 @@
+# Release forti-hole with vl-release (.claude/context/release.md).
+#
+#   vlr cut patch|minor|major|X.Y.Z --push      (locally) -> pushes vX.Y.Z -> this workflow
+#
+# build ─▶ homebrew-check ─▶ publish-apt ─▶ github-release ─▶ homebrew-tap ─▶ finalize
+#                              └─▶ docs (pmdocs push of docs/ over GitHub OIDC)
+#
+# build: prepare, check the engine pin, build the .deb (forti-cli at the wrap's revision, against
+# libforti-api-dev, offline), source archive, formula, validate, then a clean-install smoke test in a
+# stock ubuntu:24.04. Every Linux job runs on the self-hosted VPS
+# runner, every step in the disposable CI container (ci/run-ci, rootless Podman). `vlr prepare` is
+# deterministic, so later jobs re-run it and get byte-identical documents; `finalize --record`
+# proves it. Nothing is written back to main unless every publication step succeeded.
+#
+# Configuration (ValkyrianLabs organization-level):
+#   secrets.NEXUS_USER, secrets.NEXUS_PASSWORD   Nexus upload credentials
+#   vars.NEXUS_APT_REPO                          Nexus APT upload URL
+#   secrets.HOMEBREW_TAP_TOKEN                   push access to valkyrianlabs/homebrew-tap
+#   vars.RELEASE_PUBLISH_MODE   (optional)       `nexus` (default here) or `disabled`
+#   vars.VL_DOCS_ENDPOINT                        pmdocs sync endpoint; the forti-hole docs set must trust
+#                                                this repository's release workflow over OIDC
+# and a `Production` environment on this repository (publish-apt, homebrew-tap, docs).
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Release tag (e.g. v0.1.0)
+        required: true
+        type: string
+      publish:
+        description: Publish, or rehearse everything without publishing
+        required: true
+        default: dry-run
+        type: choice
+        options: [dry-run, publish]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.inputs.ref || github.ref }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_REF: ${{ github.event.inputs.ref || github.ref }}
+  VL_RELEASE_TAG: v0.5.1
+  # Stock image for clean-install smoke tests (same digest as ci/Containerfile's base).
+  UBUNTU_IMAGE: docker.io/library/ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55
+
+jobs:
+  build:
+    name: Prepare, build and validate
+    runs-on: [self-hosted, Linux, X64, ubuntu-latest-lts]
+    defaults:
+      run:
+        shell: bash ./ci/run-ci bash -euo pipefail {0}
+    outputs:
+      version: ${{ steps.state.outputs.version }}
+      debian_version: ${{ steps.state.outputs.debian_version }}
+      publish: ${{ steps.mode.outputs.publish }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ env.RELEASE_REF }}
+          fetch-depth: 0
+
+      - name: Publication mode
+        id: mode
+        run: |
+          if [ "${{ github.event_name }}" = "push" ] || [ "${{ github.event.inputs.publish }}" = "publish" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Release gate
+        run: |
+          vlr check --release --tag "${RELEASE_REF#refs/tags/}"
+          pmdocs validate --source forti-hole
+
+      - name: Prepare release documents (work tree only)
+        run: vlr prepare --record release/meta/prepare.json
+
+      - name: Release state
+        id: state
+        run: vlr status --github-output
+
+      # The formula's forti-cli resource must name the wrap's revision, with the sha256 GitHub serves,
+      # so the Homebrew and Debian builds compile the same engine.
+      - name: Engine pin
+        run: bash packaging/forti-cli-pin.sh check --download
+
+      # The package builds against the published SDK (libforti-api-dev, ValkyrianLabs APT, configured
+      # in the CI image), never the wrap: debian/rules passes --wrap-mode=nodownload. `vlr build-deb`
+      # first puts forti-cli at the wrap's revision into subprojects/forti-cli and verifies it
+      # (release.toml debian.pre_build).
+      # One step: every run-ci step is a fresh, disposable container, so the build dependencies must be
+      # installed in the same step that builds.
+      - name: Build dependencies and artifacts from the prepared work tree
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libforti-api-dev
+          dpkg-checkbuilddeps
+          jobs="$(ci/build-jobs)"   # memory-aware: every core the memory allows
+          export DEB_BUILD_OPTIONS="parallel=$jobs"
+          vlr build-deb
+          vlr source-archive
+          vlr homebrew formula
+          vlr checksums
+          vlr validate-artifacts
+          vlr artifacts
+
+      # Install the built .deb into a clean, stock Ubuntu 24.04 (container root, no host access): its
+      # runtime dependencies must come from the Ubuntu archive alone, forti-hole must work offline, and
+      # it must report the engine revision the wrap pins.
+      - name: Clean-install smoke test of the built package
+        shell: bash
+        run: |
+          # shellcheck disable=SC2016  # expanded inside the container
+          ./ci/run-ci --image "$UBUNTU_IMAGE" --root bash -euo pipefail -c '
+            apt-get update
+            apt-get install -y --no-install-recommends ./release/forti-hole_*_amd64.deb
+            pinned="$(sed -n "s/^revision *= *//p" subprojects/forti-cli.wrap | cut -c1-7)"
+            /usr/bin/forti-hole --version | grep -F "(engine forti-cli $pinned, forti-api "
+            ci/smoke-test.sh /usr/bin/forti-hole
+            # The user units ship, and installing the package never enables them.
+            test -f /usr/lib/systemd/user/forti-hole.service
+            test -f /usr/lib/systemd/user/forti-hole.timer
+            test ! -e /etc/systemd/user/timers.target.wants/forti-hole.timer
+          '
+
+      # Read-only: plans against the live index and fails now if this version was already published
+      # with different bytes, before anything is published anywhere.
+      - name: Plan APT publication
+        run: vlr publish-deb --mode nexus --dry-run
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: forti-hole-${{ steps.state.outputs.version }}
+          path: release
+          if-no-files-found: error
+
+  # One bottle per architecture, built on macOS 15: Homebrew pours a bottle on that macOS and every
+  # later one (arm64_sequoia serves 15, 26 and 27). forti-api 1.1.1 and later build there.
+  homebrew-check:
+    name: Homebrew formula install and bottle (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: build
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [macos-15, macos-15-intel]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ env.RELEASE_REF }}
+          fetch-depth: 0
+
+      - name: vl-release
+        run: |
+          git clone --quiet --depth 1 --branch "$VL_RELEASE_TAG" https://github.com/valkyrianlabs/vl-release.git "$RUNNER_TEMP/vl-release"
+          echo "$RUNNER_TEMP/vl-release/bin" >> "$GITHUB_PATH"
+
+      # Builds from the prepared source archive with forti-api from valkyrianlabs/tap and the engine
+      # from the formula's forti-cli resource, then runs the formula's test block (--version and
+      # --help) and the smoke test.
+      - name: Install the release formula from a local tap, run its test block, make the bottle
+        run: |
+          brew install meson ninja pkgconf
+          # A bottle build needs its dependencies installed already; those without bottles of their
+          # own are built from source here (brew install --build-bottle refuses to do it).
+          brew tap valkyrianlabs/tap
+          if brew commands --quiet | grep -qx trust; then brew trust valkyrianlabs/tap; fi
+          HOMEBREW_NO_AUTO_UPDATE=1 brew install --build-from-source valkyrianlabs/tap/forti-api
+          # The formula under test lives in a throwaway tap; with the published one also present, `brew bottle`
+          # resolves forti-hole by bare name on some runners and stops ("found in multiple taps"). Only this
+          # runner's disposable clone of the tap is changed.
+          rm -f "$(brew --repository valkyrianlabs/tap)/Formula/forti-hole.rb"
+          bash .github/scripts/homebrew-local-install.sh
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: forti-hole-bottle-${{ needs.build.outputs.version }}-${{ matrix.os }}
+          path: bottle
+          if-no-files-found: error
+
+  publish-apt:
+    name: Publish to the ValkyrianLabs APT repository
+    runs-on: [self-hosted, Linux, X64, ubuntu-latest-lts]
+    needs: [build, homebrew-check]
+    if: needs.build.outputs.publish == 'true'
+    environment: Production
+    defaults:
+      run:
+        shell: bash ./ci/run-ci bash -euo pipefail {0}
+    # One APT publication at a time across tags; queued, never cancelled.
+    concurrency:
+      group: forti-hole-apt-publish
+      cancel-in-progress: false
+    env:
+      RELEASE_PUBLISH_MODE: ${{ vars.RELEASE_PUBLISH_MODE || 'nexus' }}
+      NEXUS_APT_REPO: ${{ vars.NEXUS_APT_REPO }}
+      NEXUS_USER: ${{ secrets.NEXUS_USER }}
+      NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ env.RELEASE_REF }}
+          fetch-depth: 0
+
+      - name: Prepare release documents (deterministic re-run)
+        run: vlr prepare
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: forti-hole-${{ needs.build.outputs.version }}
+          path: release
+
+      # Upload (or skip if identical bytes are already published), then poll the index until the
+      # package is listed with the expected sha256.
+      - name: Publish and verify
+        run: |
+          vlr checksums --verify
+          vlr publish-deb --require-enabled
+
+      # The published package installs from the APT repository into a clean, stock Ubuntu 24.04.
+      - name: Install from the APT repository
+        shell: bash
+        env:
+          DEBIAN_VERSION: ${{ needs.build.outputs.debian_version }}
+        run: |
+          # shellcheck disable=SC2016  # expanded inside the container
+          ./ci/run-ci --image "$UBUNTU_IMAGE" --root bash -euo pipefail -c '
+            apt-get update
+            apt-get install -y --no-install-recommends ca-certificates curl
+            install -d -m 0755 /etc/apt/keyrings
+            curl -fsSL https://apt.valkyrianlabs.com/pubkey.gpg -o /etc/apt/keyrings/valkyrianlabs.gpg
+            echo "deb [signed-by=/etc/apt/keyrings/valkyrianlabs.gpg] https://apt.valkyrianlabs.com stable main" \
+              > /etc/apt/sources.list.d/valkyrianlabs.list
+            apt-get update
+            apt-get install -y "forti-hole=$DEBIAN_VERSION"
+            ci/smoke-test.sh /usr/bin/forti-hole
+          '
+
+  # The docs package (docs/, docs set slug forti-hole, never inferred) to the ValkyrianLabs docs site over
+  # GitHub OIDC (vars.VL_DOCS_ENDPOINT; the docs set trusts this repository's release workflow). Sync
+  # is idempotent, so retrying is safe; a failed push does not affect the published packages.
+  docs:
+    name: Publish the docs
+    runs-on: [self-hosted, Linux, X64, ubuntu-latest-lts]
+    needs: [build, publish-apt]
+    if: needs.build.outputs.publish == 'true'
+    environment: Production
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        shell: bash ./ci/run-ci bash -euo pipefail {0}
+    env:
+      VL_DOCS_ENDPOINT: ${{ vars.VL_DOCS_ENDPOINT }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ env.RELEASE_REF }}
+
+      - name: Validate and publish the docs package
+        run: |
+          if [ -z "$VL_DOCS_ENDPOINT" ]; then echo "::error::vars.VL_DOCS_ENDPOINT is not set"; exit 1; fi
+          pmdocs validate --source forti-hole
+          for attempt in 1 2 3; do
+            if timeout 300 pmdocs push --endpoint "$VL_DOCS_ENDPOINT" --source forti-hole --github-oidc --publish; then
+              exit 0
+            fi
+            echo "pmdocs push attempt ${attempt}/3 failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
+          echo "::error::pmdocs push failed after 3 attempts. The package release is unaffected; re-run this job."
+          exit 1
+
+  github-release:
+    name: GitHub release
+    runs-on: [self-hosted, Linux, X64, ubuntu-latest-lts]
+    needs: [build, homebrew-check, publish-apt]
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash ./ci/run-ci bash -euo pipefail {0}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ env.RELEASE_REF }}
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: forti-hole-${{ needs.build.outputs.version }}
+          path: release
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: forti-hole-bottle-${{ needs.build.outputs.version }}-*
+          merge-multiple: true
+          path: bottle
+
+      # The build's artifacts are verified first; the macOS bottle then joins them (SHA256SUMS is
+      # written again to cover it).
+      - name: Create or update the release (title/body from the prepared notes; assets immutable)
+        run: |
+          vlr prepare
+          vlr checksums --verify
+          cp bottle/*.bottle.tar.gz release/
+          vlr checksums
+          vlr github-release
+
+  homebrew-tap:
+    name: Homebrew tap
+    runs-on: [self-hosted, Linux, X64, ubuntu-latest-lts]
+    needs: [build, github-release]
+    environment: Production
+    defaults:
+      run:
+        shell: bash ./ci/run-ci bash -euo pipefail {0}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ env.RELEASE_REF }}
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: forti-hole-${{ needs.build.outputs.version }}
+          path: release
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: valkyrianlabs/homebrew-tap
+          ref: main
+          path: homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      # Downloads the formula's url (the GitHub release asset) and checks its sha256 before
+      # committing; refuses to change a formula version that is already published.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: forti-hole-bottle-${{ needs.build.outputs.version }}-*
+          merge-multiple: true
+          path: bottle
+
+      # The formula names the bottle the GitHub release now carries, so installs pour it.
+      - name: Publish the formula
+        run: |
+          vlr prepare
+          python3 .github/scripts/homebrew-bottle-block.py release/homebrew/forti-hole.rb bottle/*.bottle.json
+          vlr homebrew publish --tap-dir homebrew-tap
+
+  finalize:
+    name: Record the release on main
+    runs-on: [self-hosted, Linux, X64, ubuntu-latest-lts]
+    needs: [build, publish-apt, github-release, homebrew-tap]
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash ./ci/run-ci bash -euo pipefail {0}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ env.RELEASE_REF }}
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: forti-hole-${{ needs.build.outputs.version }}
+          path: release
+
+      # Re-prepare (deterministic), prove it matches what was built and published, then commit the
+      # promoted history + cleared staging files onto main. A no-op if main already records it.
+      - name: Finalize
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          vlr prepare
+          vlr finalize --record release/meta/prepare.json

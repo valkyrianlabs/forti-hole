@@ -1,1 +1,88 @@
-{}
+{
+  "budget": {
+    "entry_headroom_percent": 10,
+    "memory_headroom_percent": 15,
+    "on_overrun": "refuse"
+  },
+  "dnsfilter": {
+    "block_action": "block",
+    "error_allow": true,
+    "log": true,
+    "manage_profiles": true
+  },
+  "enabled": false,
+  "encoding": "strict",
+  "format": 1,
+  "prefix": "fh-",
+  "profile": "",
+  "profiles": {
+    "light": {
+      "tiers": [
+        "base",
+        "threat"
+      ]
+    },
+    "standard": {
+      "tiers": [
+        "base",
+        "plus",
+        "threat"
+      ]
+    },
+    "strict": {
+      "tiers": [
+        "base",
+        "plus",
+        "ultimate",
+        "threat"
+      ]
+    }
+  },
+  "sources": [
+    {
+      "format": "hosts",
+      "id": "stevenblack",
+      "tier": "base",
+      "url": "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
+    },
+    {
+      "format": "adblock",
+      "id": "hagezi-pro",
+      "tier": "base",
+      "url": "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.txt"
+    },
+    {
+      "format": "adblock",
+      "id": "hagezi-pro-plus",
+      "tier": "plus",
+      "url": "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/pro.plus.txt"
+    },
+    {
+      "format": "adblock",
+      "id": "hagezi-ultimate",
+      "tier": "ultimate",
+      "url": "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/ultimate.txt"
+    },
+    {
+      "auto": [
+        "medium",
+        "mini"
+      ],
+      "format": "adblock",
+      "id": "hagezi-tif",
+      "tier": "threat",
+      "variant": "auto",
+      "variants": {
+        "full": "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/tif.txt",
+        "medium": "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/tif.medium.txt",
+        "mini": "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/adblock/tif.mini.txt"
+      }
+    }
+  ],
+  "tiers": [
+    "base",
+    "plus",
+    "ultimate",
+    "threat"
+  ]
+}

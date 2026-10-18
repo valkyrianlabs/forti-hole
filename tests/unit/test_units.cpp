@@ -30,6 +30,14 @@ TEST(Config, TheExampleValidatesAndRoundTrips) {
     EXPECT_EQ(to_json(again), to_json(c));
 }
 
+TEST(Config, TheShippedExampleIsWhatSetupWrites) {
+    const char* root = std::getenv("FH_SOURCE_ROOT");
+    if (!root) GTEST_SKIP() << "FH_SOURCE_ROOT is not set";
+    auto text = read_file(std::filesystem::path(root) / "packaging" / "config.example.json");
+    ASSERT_TRUE(text);
+    EXPECT_EQ(json::parse(*text), example_config()) << "regenerate: forti-hole setup --offline --force --config packaging/config.example.json";
+}
+
 TEST(Config, RejectsMistakesWithTheirLocation) {
     auto expect_error = [](json j, std::string_view where) {
         try {
@@ -186,7 +194,9 @@ TEST(Import, PiholeGroupsBecomeProfilesAndSharedListsTiers) {
     // StevenBlack and TIF are shared by every group: one tier, "common".
     const Source* tif = nullptr;
     for (const auto& s: c.sources) {
-        if (s.id == "stevenblack") EXPECT_EQ(s.tier, "common");
+        if (s.id == "stevenblack") {
+            EXPECT_EQ(s.tier, "common");
+        }
         if (s.id == "hagezi-tif") tif = &s;
     }
     ASSERT_TRUE(tif);

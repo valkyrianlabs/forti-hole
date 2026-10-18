@@ -297,7 +297,9 @@ TEST(Sync, OperatorObjectsAreNeverTouched) {
     EXPECT_EQ(h.device.profiles["office"]["ftgd-dns"]["filters"].size(), 1u);
     // The operator's category is never reused.
     for (const auto& [name, feed]: h.device.feeds)
-        if (name.starts_with("fh-")) EXPECT_NE(feed.object["category"], 192);
+        if (name.starts_with("fh-")) {
+            EXPECT_NE(feed.object["category"], 192);
+        }
     // Their entries count against the budget.
     auto result = h.run_json({"plan"});
     EXPECT_EQ(result["data"]["compile"]["budget"]["entries"]["other_feeds"], 1);

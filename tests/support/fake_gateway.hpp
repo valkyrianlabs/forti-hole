@@ -259,7 +259,8 @@ namespace fh::test {
                 } else if (kind == "update") {
                     auto it = feeds.find(key);
                     if (it == feeds.end()) return "no such feed";
-                    for (const auto& [k, v]: op.value("set", json::object()).items()) it->second.object[k] = v;
+                    const json set = op.value("set", json::object());   // items() must not outlive the json it walks
+                    for (const auto& [k, v]: set.items()) it->second.object[k] = v;
                 } else if (kind == "delete") {
                     auto it = feeds.find(key);
                     if (it == feeds.end()) return "no such feed";
@@ -285,7 +286,8 @@ namespace fh::test {
                 else if (kind == "update") {
                     auto it = profiles.find(key);
                     if (it == profiles.end()) return "no such profile";
-                    for (const auto& [k, v]: op.value("set", json::object()).items()) it->second[k] = v;
+                    const json set = op.value("set", json::object());
+                    for (const auto& [k, v]: set.items()) it->second[k] = v;
                 } else if (kind == "delete") {
                     for (const auto& [id, p]: policies)
                         if (p.value("dnsfilter-profile", "") == key) return "the profile is used by a policy";
@@ -296,7 +298,8 @@ namespace fh::test {
             if (resource == "firewall/policy") {
                 auto it = policies.find(std::stoull(key));
                 if (it == policies.end()) return "no such policy";
-                for (const auto& [k, v]: op.value("set", json::object()).items()) it->second[k] = v;
+                const json set = op.value("set", json::object());
+                for (const auto& [k, v]: set.items()) it->second[k] = v;
                 for (const auto& field: op.value("clear", json::array())) it->second[field.get<std::string>()] = "";
                 return {};
             }

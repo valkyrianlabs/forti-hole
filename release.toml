@@ -1,0 +1,116 @@
+# vl-release repository contract: https://github.com/valkyrianlabs/vl-release
+# `vlr help config` documents every key. Release CI (.github/workflows/release.yml) only calls `vlr`
+# commands. How to cut a release and what it needs: .claude/context/release.md.
+schema_version = 1
+
+[tool]
+requires = ">=0.5,<1"
+
+[project]
+name = "forti-hole"
+package = "forti-hole"
+repository = "valkyrianlabs/forti-hole"
+
+# meson.build reads VERSION itself (`version : files('VERSION')`), so no other file carries it.
+[version]
+canonical = "VERSION"
+
+[release]
+branch = "main"
+
+[debian]
+distribution = "unstable"
+urgency = "medium"
+maintainer = "Cooper Larson <cooper@valkyrianlabs.com>"
+# The engine source: forti-cli at exactly the revision subprojects/forti-cli.wrap pins, cloned into
+# subprojects/forti-cli and verified (HEAD = the pin, no local changes) before build-deb copies the
+# work tree. A co-development symlink there is refused. The package build itself then runs with
+# --wrap-mode=nodownload (debian/rules): it never fetches anything, and forti-api comes from the
+# system libforti-api-dev. See .claude/context/release.md, "Engine source".
+pre_build = [["bash", "packaging/forti-cli-pin.sh", "vendor"]]
+# Parallelism comes from DEB_BUILD_OPTIONS=parallel=$(ci/build-jobs), set by the release workflow.
+build_command = ["dpkg-buildpackage", "-us", "-uc", "-b"]
+# build-deb copies the work tree, not a Git commit (Git metadata never comes along): never let
+# credentials, local tooling state, a co-development forti-api checkout or a Meson package cache into
+# the build tree. config.yaml and .ssl/ are forti-hole 0.x's local credentials and certificates
+# (never tracked; an operator's checkout may still have them).
+build_excludes = [
+  ".env",
+  "config.yaml",
+  ".ssl",
+  "~",
+  ".certs",
+  ".idea",
+  ".claude",
+  ".agents",
+  ".DS_Store",
+  ".cache",
+  "subprojects/forti-api",
+  "subprojects/packagecache",
+  "compile_commands.json",
+]
+
+[[debian.packages]]
+name = "forti-hole"
+# One architecture per package contract (vl-release 0.5): amd64 only until vl-release accepts one
+# .deb per architecture of the same package (.claude/context/release.md, "Multi-architecture").
+architecture = "amd64"
+# The executable, the systemd user units the operator opts into (installed, never enabled), the
+# example configuration, the macOS launchd template and the agent skill.
+required_paths = [
+  "usr/bin/forti-hole",
+  "usr/share/doc/forti-hole/copyright",
+  "usr/lib/systemd/user/forti-hole.service",
+  "usr/lib/systemd/user/forti-hole.timer",
+  "usr/share/forti-hole/config.example.json",
+  "usr/share/forti-hole/com.valkyrianlabs.forti-hole.plist",
+  "usr/share/forti-hole/skill/forti-hole/SKILL.md",
+]
+# An executable package: the engine is internal and static, so no headers, libraries or pkg-config
+# files ship; forti-cli's own executable and man page never come along (the subproject builds no
+# `forti`); no system-wide units (the program runs as the operator, never as a system service); and
+# never credentials or certificates.
+forbidden_paths = [
+  "usr/include/*",
+  "usr/lib/*.a",
+  "usr/lib/*.so*",
+  "usr/lib/*pkgconfig/*",
+  "usr/share/pkgconfig/*",
+  "usr/bin/forti",
+  "usr/share/man/man1/forti.1*",
+  "usr/lib/systemd/system/*",
+  "lib/systemd/system/*",
+  "etc/systemd/*",
+  "*.env",
+  "*/.env",
+  "*.p12",
+  "*.pfx",
+  "*.pem",
+  "*.cer",
+  "*.crt",
+  "*.key",
+  "*.token",
+]
+
+# The ValkyrianLabs APT repository (Nexus). Upload URL and credentials come from the org-level
+# NEXUS_APT_REPO variable and NEXUS_USER / NEXUS_PASSWORD secrets; RELEASE_PUBLISH_MODE=nexus enables
+# uploads (.github/workflows/release.yml).
+[publish.apt]
+repository_url = "https://apt.valkyrianlabs.com"
+suite = "stable"
+components = ["main"]
+architectures = ["amd64"]
+
+# The reproducible archive of the prepared tree (tracked files only), attached to the GitHub release;
+# the Homebrew formula's url. It carries subprojects/forti-cli.wrap but not the engine source: the
+# formula adds that as a resource pinned to the same revision, and a plain source build fetches it
+# through the wrap.
+[source_archive]
+name = "{package}-{version}.tar.gz"
+exclude = [".claude", ".agents"]
+
+[homebrew]
+formula = "packaging/homebrew/forti-hole.rb"
+tap = "valkyrianlabs/homebrew-tap"
+tap_path = "Formula/forti-hole.rb"
+source = "release-asset"

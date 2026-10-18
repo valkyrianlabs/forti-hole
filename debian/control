@@ -1,0 +1,41 @@
+Source: forti-hole
+Section: admin
+Priority: optional
+Maintainer: Cooper Larson <cooper@valkyrianlabs.com>
+Build-Depends:
+ debhelper-compat (= 13),
+ g++ (>= 4:13),
+ libcurl4-openssl-dev | libcurl-dev,
+ libforti-api-dev (>= 1.3.0),
+ libgtest-dev <!nocheck>,
+ meson (>= 1.3.0),
+ ninja-build,
+ pkgconf,
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+Homepage: https://github.com/valkyrianlabs/forti-hole
+
+Package: forti-hole
+Architecture: any
+Depends:
+ ${misc:Depends},
+ ${shlibs:Depends},
+Recommends:
+ forti-cli,
+ valkyrianlabs-archive-keyring,
+Description: DNS blocklists as FortiGate threat feeds
+ forti-hole downloads DNS blocklists (hagezi, StevenBlack, your own lists),
+ deduplicates them across sources and filtering tiers, and keeps them on a
+ FortiGate as push-mode external threat feeds that its DNS filter profiles
+ block. It checks the compiled set against the device's domain-entry limit
+ and memory before writing, sends only what changed, and verifies on the
+ device what it loaded.
+ .
+ It is never in the traffic path: a systemd user timer (shipped, never
+ enabled) runs it twice a day. A failed download never empties a feed. It
+ writes only feeds and DNS filter profiles carrying its own name prefix and
+ ownership marker, and changes a firewall policy only when told to
+ (`forti-hole attach`).
+ .
+ Device profiles and credentials are managed with `forti configure` from the
+ forti-cli package; the command engine it shares with forti is compiled in.

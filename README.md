@@ -1,208 +1,90 @@
 # forti-hole
 
-## Update 9/12/24
-### An inherent limitation in use
-* This solution works brilliantly for DNS filters when applied on a policy basis.
-* The problem: when your needs grow to desire DNS Service on Interface (ie an internal dns server with recursive resolution and caching), you quickly learn that DNS service on interface is an 'in-policy' route which bypasses firewall policy level filtering all interface devices.
-  * Additionally: if you apply a DNS filter to your interface DNS server, because its operating at the application layer (7), it causes all kinds of ssl warnings that make browsing impossible. The policy level filters evidently apply the filters on layer 2 the network layer which evades this detection.
-* You may see where this is going... you can't run a dns service on interface (layer 7) AND have policy level DNS filtering (layer 2) at the same time.
+**DNS blocklists as FortiGate threat feeds, deduplicated, budgeted and verified.**
 
-### This is still a solid DNS solution, if you don't have an interface DNS server running natively on the fortigate.
-* As you can guess, pi-hole is once again the solution.
-* This is a solid DNS filter but its limited in scope and you end up needing an external DNS server to truly deliver a secure DNS environment.
-* I will leave this up and likely continue to maintain and evolve it to help *anyone who doesn't need to host a DNS server or pay for UTP* to get great DNS filtering served as Threat Feeds via API.
+forti-hole downloads the DNS blocklists you choose (hagezi, StevenBlack, your own lists), merges them
+into one deduplicated set, and keeps it on a FortiGate as push-mode external threat feeds that the
+FortiGate's DNS filter profiles block. Ad, tracker and threat blocking for every network behind the
+firewall, with no resolver to run.
 
-## Build and Installation Instructions
+- **Deduplicated for real.** Every name is kept once across lists and filtering tiers; names already
+  covered by a blocked parent domain are dropped; each feed line is published exactly once. The report
+  shows every count, per list.
+- **Fits the device, or says why not.** The compiled set is checked against the FortiGate's
+  device-wide entry limit (1,000,000 on a 60F) and its memory before anything is written. hagezi TIF
+  uses the largest variant that fits. Nothing is silently truncated.
+- **Deltas, verified.** Only changed entries are pushed; the device is read back after every push. An
+  unchanged run writes nothing.
+- **Fail-static.** A failed or broken download falls back to the last good copy; a feed is never
+  emptied by a network error. An interrupted sync is repaired by the next one.
+- **Leaves your objects alone.** It writes only feeds and DNS filter profiles carrying its prefix and
+  ownership marker, and touches a firewall policy only when you run `forti-hole attach`.
 
-### 👯 Step 1: Clone the Repository
+## When to use it, and when not to
 
-First, clone the **forti-hole** repository:
+forti-hole is for networks with a FortiGate whose owners do **not** want to run their own DNS server.
+A real Pi-hole (or AdGuard Home) as your resolver does more: per-client query logs, instant
+allow-listing from a dashboard, regex blocking, and no device-wide entry limit. If you already run
+one, forti-hole adds nothing; use one or the other.
 
-```bash
-git clone https://github.com/coopsdev/forti-hole.git
-cd forti-hole
+A DNS filter, forti-hole's or a Pi-hole's, only sees DNS sent to it: DNS over HTTPS, hard-coded
+resolvers and VPNs bypass it unless your policies block them
+([Where filtering applies](docs/guides/topologies.md)).
+
+## Capacity
+
+| FortiGate class (FortiOS 7.4.4+) | Domain-entry limit | Default lists with |
+|---|---|---|
+| Entry-level, 2 GB (40F, 60F, 61F, 70F, 80F) | 1,000,000 | hagezi TIF **mini**: 807,914 lines |
+| Mid-range | 3,000,000 | TIF **medium**: 2,221,664 lines |
+| High-end | 5,000,000 | TIF full |
+
+The limit is shared by every domain feed on the device. Twelve to twenty full 131k-line feeds
+(1.6–2.6 million entries) overflow a 2 GB model: FortiOS 7.4.4+ drops what does not fit, and older
+firmware runs out of memory first. forti-hole's budget prevents both
+([Capacity](docs/guides/capacity.md)).
+
+## Install
+
+```sh
+brew install valkyrianlabs/tap/forti-cli valkyrianlabs/tap/forti-hole    # macOS, Linuxbrew
+sudo apt install forti-hole                                              # Debian/Ubuntu amd64, apt.valkyrianlabs.com
 ```
 
-### 🛠 Step 2: Build the Program
+You need a FortiGate on FortiOS 7.2.1 or later (7.4.4+ recommended) and a forti profile for it
+(`forti configure`, from [forti-cli](https://github.com/valkyrianlabs/forti-cli)). A FortiGuard
+subscription is not required. [Install](docs/getting-started/install.md) has the APT setup and the
+source build.
 
-Run the `build.sh` script to compile the program and create the `config.yaml` file.
+## Quick start
 
-```bash
-./bin/build.sh
+```sh
+forti configure                       # the FortiGate profile (forti-cli)
+forti-hole setup                      # ~/.forti/hole/config.json, "enabled": false
+forti-hole compile --device           # deduplication report, and whether it fits this FortiGate
+forti-hole plan                       # every change a sync would make (writes nothing)
+# set "enabled": true in ~/.forti/hole/config.json
+forti-hole sync                       # create, push, verify
+forti-hole attach standard --policy 2 # filter a firewall policy's DNS with fh-standard
+systemctl --user enable --now forti-hole.timer    # twice a day (or: brew services start forti-hole)
 ```
 
-This script will check if `config.yaml` exists and create it from `config.example.yaml` if necessary.
+Coming from forti-hole 0.x: `forti-hole migrate config config.yaml` and `forti-hole migrate feeds`
+([Migrating](docs/guides/migration.md)).
 
-### 👷 Step 3: Configure `config.yaml`
+## Documentation
 
-Before running the program, make sure you properly configure the `config.yaml` file located in the build directory. Adjust the relevant settings to match your environment (e.g., API keys, IP addresses, and certificate paths).
+| | |
+|---|---|
+| [Overview](docs/index.md) | What it does, measured on a FortiGate-60F |
+| [Install](docs/getting-started/install.md), [Quick start](docs/getting-started/quick-start.md) | Getting started |
+| [Lists, tiers and profiles](docs/guides/sources-and-profiles.md), [Capacity](docs/guides/capacity.md), [Where filtering applies](docs/guides/topologies.md) | How it works |
+| [Safety](docs/guides/safety.md), [Scheduling](docs/guides/scheduling.md), [Migrating](docs/guides/migration.md) | Operating it |
+| [Command line](docs/reference/cli.md), [Configuration](docs/reference/configuration.md), [Troubleshooting](docs/reference/troubleshooting.md) | Reference |
+| [Building and testing](docs/development/testing.md) | Development |
 
-### 🚀 Step 4: Run the Program
+An agent skill for operating forti-hole is in [skill/forti-hole](skill/forti-hole/SKILL.md).
 
-Once `config.yaml` is properly configured, you can run the program:
+## License
 
-```bash
-./bin/run.sh
-```
-
-This script will build the program if necessary and execute it using the configurations in `config.yaml`.
-
-### 🔃 Step 5: Install as a Systemd Service (Linux Only)
-
-To install **forti-hole** as a systemd service on Linux with a default 5am everyday run-timer, use the `install.sh` script:
-
-```bash
-./bin/install.sh
-```
-
-This script will install the program as a service, allowing it to run automatically on boot and at 5am (easily customizable) everyday.
-
-### 🪬 Step 6: Update the Program
-
-To update the repository, remove the build directory, and rebuild the program, run the `update.sh` script:
-
-```bash
-./bin/update.sh
-```
-
-This script pulls the latest changes from the repository, removes the existing build directory, and triggers a fresh build.
-
-## Overview
-
-**forti-hole** is a cutting-edge DNS Threat Feed management tool, engineered for FortiGate users who need to manage DNS blocklists at an unprecedented scale. Inspired by Pi-hole, forti-hole is designed to tackle the challenges of handling massive domain lists, overcoming issues like buffer overflow and network traffic interruptions that plague FortiGate’s non-API managed threat feeds.
-
-**forti-hole** delivers a tested payload of 16+ files, encompassing over 2 million unique DNS entries, without causing any network interruption or delay to users. It directly addresses the challenges associated with managing 'pull' update method threat feeds on FortiGate, where a simultaneous refresh can overwhelm the buffers in an alarmingly short timespan, forcing a manual reset of the FortiGate and impacting all network users.
-
-The default configuration includes a blocklist 'recipe' with these domains, organized into a 2-level security system, and scores up to 94+% on the [d3ward ad-block test](https://d3ward.github.io/toolz/adblock).
-
-While forti-hole isn't a Pi-hole replacement, it excels in simplicity and scale. If you need YAML-configured control and the capability to efficiently manage vast DNS blocklists on your FortiGate, **forti-hole** is your solution.
-
-## Key Features
-
-- **Efficient DNS Blocklist Management**: Manage blocklists containing over 2 million unique DNS entries across multiple files without causing network interruptions.
-- **YAML Configuration**: Simplified management through a YAML config file, allowing for easy customization and deployment.
-- **Automated Security Level Assignment**: Future releases will automate DNS filter assignments to reduce manual management.
-- **[forti-api](https://github.com/coopsdev/forti-api) Integration**: Provides deep control over your FortiGate setup via a type-safe, nlohmann-based syntax.
-- **Buffer Overflow Protection**: Prevents buffer overflow issues caused by dynamic feed updates in FortiGate, specifically addressing issues with the 'pull' update method that can force a manual reset.
-- **Future forti2ban Integration**: Planned integration with [forti2ban](https://github.com/coopsdev/forti2ban) for synchronized category management.
-
-## Why forti-hole?
-
-FortiGate devices often struggle with large DNS blocklists due to memory limitations and lack of overflow protections. **forti-hole** manages threat feeds via the API, preventing the buffer overflow issues that can occur when refreshing massive domain lists through the 'pull' update method. This tool is for network security professionals who need a reliable way to manage DNS blocklists on FortiGate devices without risking network downtime.
-
-With upcoming features like automatic security level management and forti2ban integration, **forti-hole** is set to become an indispensable tool for anyone serious about network security on FortiGate.
-
-## Default 'Advanced' Settings - Results from [d3ward.github.io/toolz/adblock](https://d3ward.github.io/toolz/adblock)
-
-![Ad-block Test Results](https://cooperhlarson.com/media/Screenshot%202024-08-31%20at%205.07.39%C3%A2%C2%AFPM.png)
-
-## Contributing
-
-Contributions are welcome! As **forti-hole** transitions from Python to a more robust C++ implementation, there are many opportunities to get involved. **Owning a FortiGate firewall is required** for testing, as I cannot provide access to my personal FortiGate 60F. The project is licensed under the MIT License, so your contributions will benefit the broader community.
-
-## Status
-
-**forti-hole** is in active production. Many features may be broken as the project undergoes a significant refactor from its original Python version. However, the core functionality is rapidly improving, with a major release planned for September 10, 2024, including a multi-platform precompiled executable with configuration and `.env` files.
-
-Stay tuned for updates and help make **forti-hole** the go-to tool for managing DNS blocklists on FortiGate!
-
-# Sample forti-hole output
-
-```markdown
-Starting blocklist scraping process...
-
-Processing config file...
-
-Scraping blocklists...
-
-Fetching URL: https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/pro.plus.txt
-Fetching URL: https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/tif.txt
-Fetching URL: https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/ultimate.txt
-Fetching URL: https://raw.githubusercontent.com/blocklistproject/Lists/master/adguard/ads-ags.txt
-Fetching URL: https://raw.githubusercontent.com/blocklistproject/Lists/master/adguard/tracking-ags.txt
-Fetching URL: https://raw.githubusercontent.com/blocklistproject/Lists/master/adguard/malware-ags.txt
-Fetching URL: https://raw.githubusercontent.com/blocklistproject/Lists/master/adguard/phishing-ags.txt
-Fetching URL: https://raw.githubusercontent.com/blocklistproject/Lists/master/adguard/ransomware-ags.txt
-Fetching URL: https://raw.githubusercontent.com/blocklistproject/Lists/master/adguard/scam-ags.txt
-Fetching URL: https://raw.githubusercontent.com/blocklistproject/Lists/master/adguard/abuse-ags.txt
-Fetching URL: https://raw.githubusercontent.com/blocklistproject/Lists/master/adguard/fraud-ags.txt
-Fetching URL: https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts/default.txt
-
-Parsing response data...
-
-Parsing response data: https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/pro.plus.txt
-Parsing response data: https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/tif.txt
-Parsing response data: https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/ultimate.txt
-Parsing response data: https://raw.githubusercontent.com/blocklistproject/Lists/master/adguard/ads-ags.txt
-Parsing response data: https://raw.githubusercontent.com/blocklistproject/Lists/master/adguard/tracking-ags.txt
-Parsing response data: https://raw.githubusercontent.com/blocklistproject/Lists/master/adguard/malware-ags.txt
-Parsing response data: https://raw.githubusercontent.com/blocklistproject/Lists/master/adguard/phishing-ags.txt
-Parsing response data: https://raw.githubusercontent.com/blocklistproject/Lists/master/adguard/ransomware-ags.txt
-Parsing response data: https://raw.githubusercontent.com/blocklistproject/Lists/master/adguard/scam-ags.txt
-Parsing response data: https://raw.githubusercontent.com/blocklistproject/Lists/master/adguard/abuse-ags.txt
-Parsing response data: https://raw.githubusercontent.com/blocklistproject/Lists/master/adguard/fraud-ags.txt
-Parsing response data: https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts/default.txt
-
-Blocklist processing successfully completed...
-
-Consolidating data...
-Gathering threat feed information...
-Creating threat feed containers...
-Updating firewall policies...
-Constructing files and pushing threat feeds...
-
-Security Level 0: { Files: 14, LPF: 128423 }
-
-Built file: forti-hole_security_level-0_part-1 with 128424 lines.
-Successfully uploaded to FortiGate: forti-hole_security_level-0_part-1
-
-Built file: forti-hole_security_level-0_part-2 with 128424 lines.
-Successfully uploaded to FortiGate: forti-hole_security_level-0_part-2
-
-Built file: forti-hole_security_level-0_part-3 with 128424 lines.
-Successfully uploaded to FortiGate: forti-hole_security_level-0_part-3
-
-Built file: forti-hole_security_level-0_part-4 with 128424 lines.
-Successfully uploaded to FortiGate: forti-hole_security_level-0_part-4
-
-Built file: forti-hole_security_level-0_part-5 with 128424 lines.
-Successfully uploaded to FortiGate: forti-hole_security_level-0_part-5
-
-Built file: forti-hole_security_level-0_part-6 with 128424 lines.
-Successfully uploaded to FortiGate: forti-hole_security_level-0_part-6
-
-Built file: forti-hole_security_level-0_part-7 with 128424 lines.
-Successfully uploaded to FortiGate: forti-hole_security_level-0_part-7
-
-Built file: forti-hole_security_level-0_part-8 with 128424 lines.
-Successfully uploaded to FortiGate: forti-hole_security_level-0_part-8
-
-Built file: forti-hole_security_level-0_part-9 with 128424 lines.
-Successfully uploaded to FortiGate: forti-hole_security_level-0_part-9
-
-Built file: forti-hole_security_level-0_part-10 with 128424 lines.
-Successfully uploaded to FortiGate: forti-hole_security_level-0_part-10
-
-Built file: forti-hole_security_level-0_part-11 with 128424 lines.
-Successfully uploaded to FortiGate: forti-hole_security_level-0_part-11
-
-Built file: forti-hole_security_level-0_part-12 with 128424 lines.
-Successfully uploaded to FortiGate: forti-hole_security_level-0_part-12
-
-Built file: forti-hole_security_level-0_part-13 with 128424 lines.
-Successfully uploaded to FortiGate: forti-hole_security_level-0_part-13
-
-Built file: forti-hole_security_level-0_part-14 with 128423 lines.
-Successfully uploaded to FortiGate: forti-hole_security_level-0_part-14
-Security Level 1: { Files: 2, LPF: 100084 }
-
-Built file: forti-hole_security_level-1_part-1 with 100085 lines.
-Successfully uploaded to FortiGate: forti-hole_security_level-1_part-1
-
-Built file: forti-hole_security_level-1_part-2 with 100084 lines.
-Successfully uploaded to FortiGate: forti-hole_security_level-1_part-2
-
-forti-hole finished successfully in 33s
-```
-
----
+MIT

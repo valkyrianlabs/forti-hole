@@ -31,7 +31,7 @@ namespace fh {
     // Each returns a report (JSON) of what it changed; SyncError on refusal or failure.
     nlohmann::json attach_policy(ManageContext& ctx, std::string_view profile, std::uint64_t policy);
     nlohmann::json detach_policy(ManageContext& ctx, std::uint64_t policy, bool force);
-    // Where forti-hole's profiles are in use (firewall policies), for status, doctor, remove.
+    // Where forti-hole's profiles are in use (firewall policies, DNS services), for status, doctor, remove.
     nlohmann::json profile_references(Gateway& gateway, const Config& config);
 
     // Deletes forti-hole's DNS filter profiles (refused while one is attached) and feeds.

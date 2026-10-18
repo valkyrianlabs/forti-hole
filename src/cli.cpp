@@ -383,7 +383,9 @@ namespace fh {
             json refs = profile_references(*gateway, config);
             text += "\nAttached profiles\n";
             if (refs.empty()) text += "  none: no traffic is filtered by forti-hole yet (`forti-hole attach`)\n";
-            for (const auto& r: refs) text += std::format("  policy {} ({}) uses {}\n", r["target"].dump(), r.value("name", ""), r["profile"].get<std::string>());
+            for (const auto& r: refs)
+                text += r["kind"] == "policy" ? std::format("  policy {} ({}) uses {}\n", r["target"].dump(), r.value("name", ""), r["profile"].get<std::string>())
+                                              : std::format("  the DNS service on {} uses {}\n", r["target"].get<std::string>(), r["profile"].get<std::string>());
             if (state.paused) text += std::format("\nPaused since {}\n", state.paused_at);
             if (journal) text += "\nThe last sync did not finish; the next one re-sends its feeds.\n";
             if (!state.last_run.is_null()) text += std::format("\nLast sync {}: exit {}\n", state.last_run.value("at", "?"), state.last_run.value("exit", 0));
@@ -444,7 +446,7 @@ namespace fh {
                 check("warn", "attachment",
                       "no firewall policy uses a forti-hole profile: DNS is filtered only on policies DNS queries cross (`forti-hole attach PROFILE --policy ID`)");
             else
-                check("ok", "attachment", std::format("{} policy(ies) use forti-hole profiles", refs.size()));
+                check("ok", "attachment", std::format("{} policy or DNS service attachment(s) use forti-hole profiles", refs.size()));
             if (!config.enabled) check("info", "enabled", "\"enabled\" is false: sync writes nothing");
             if (state.paused) check("info", "paused", "forti-hole is paused");
             if (load_journal(ctx.env.home)) check("warn", "journal", "the last sync did not finish; the next one re-sends its feeds in full");

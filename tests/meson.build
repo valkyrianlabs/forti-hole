@@ -20,7 +20,7 @@ if gtest_dep.found()
                             include_directories : include_directories('support'),
                             dependencies : [fh_core_dep, gtest_dep],
                             implicit_include_directories : false)
-    test('unit', unit_tests, env : test_env, suite : 'unit', timeout : 120)
+    test('unit', unit_tests, env : test_env + {'FH_SOURCE_ROOT' : meson.project_source_root()}, suite : 'unit', timeout : 120)
 endif
 
 # The real binary end to end (suite 'integration'): forti-hole through the real engine (libcurl, verified
