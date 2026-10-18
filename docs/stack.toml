@@ -1,0 +1,54 @@
+[project]
+title = "forti-hole"
+description = "DNS blocklists as FortiGate threat feeds, deduplicated across sources and tiers, checked against the device's entry and memory limits, pushed as deltas and verified on the device."
+
+[[stack.languages]]
+name = "C++23"
+
+[[stack.libraries]]
+name = "forti-api"
+
+[[stack.libraries]]
+name = "forti-cli engine"
+
+[[stack.libraries]]
+name = "libcurl"
+
+[[stack.libraries]]
+name = "nlohmann/json"
+
+[[stack.apis]]
+name = "FortiOS REST API"
+
+[[stack.apis]]
+name = "FortiGate external threat feeds"
+
+[[stack.services]]
+name = "systemd"
+
+[[stack.services]]
+name = "launchd"
+
+[[stack.build]]
+name = "Meson"
+
+[[stack.build]]
+name = "Ninja"
+
+[[stack.testing]]
+name = "GoogleTest"
+
+[[stack.testing]]
+name = "ASan/UBSan"
+
+[[stack.packaging]]
+name = "Debian packages"
+
+[[stack.packaging]]
+name = "Homebrew"
+
+[[stack.infrastructure]]
+name = "GitHub Actions"
+
+[[stack.infrastructure]]
+name = "Podman"
