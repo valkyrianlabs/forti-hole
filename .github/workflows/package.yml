@@ -100,13 +100,8 @@ jobs:
             pending | prepared | unbumped) ;;
             *) echo "release phase $phase: no staged release docs, skipping the formula install"; exit 0 ;;
           esac
-          # As release.yml: a bottle build needs its dependencies installed already; those without
-          # bottles of their own (forti-api) are built from source here (brew install --build-bottle
-          # refuses to do it), and the published tap's forti-hole is removed from this runner's
-          # clone so `brew bottle` does not find the formula in two taps.
+          # As release.yml: the formula's dependencies are all in homebrew/core and installed first
+          # (brew install --build-bottle builds none of them). Nothing from valkyrianlabs/tap is tapped or
+          # trusted: the script installs with an empty trust store, as a user would.
           brew install meson ninja pkgconf
-          brew tap valkyrianlabs/tap
-          if brew commands --quiet | grep -qx trust; then brew trust valkyrianlabs/tap; fi
-          HOMEBREW_NO_AUTO_UPDATE=1 brew install --build-from-source valkyrianlabs/tap/forti-api
-          rm -f "$(brew --repository valkyrianlabs/tap)/Formula/forti-hole.rb"
           bash .github/scripts/homebrew-local-install.sh

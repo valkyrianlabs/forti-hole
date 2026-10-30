@@ -40,7 +40,7 @@ name resolution.
 brew install valkyrianlabs/tap/forti-cli valkyrianlabs/tap/forti-hole
 ```
 
-Recent Homebrew versions ask you to trust a third-party tap first (`brew trust valkyrianlabs/tap`).
+No `brew tap` or `brew trust` step: Homebrew trusts the formulae named in full on the command line.
 `forti-cli` provides `forti configure`; forti-hole does not need it at run time.
 
 The example configuration and the launchd template are in `$(brew --prefix)/share/forti-hole/`.

@@ -5,9 +5,12 @@
 # disposable checkout: `vlr prepare` rewrites the release documents (bumping the version first when
 # unreleased).
 #
-# The build dependency forti-api comes from the published tap (valkyrianlabs/tap), exactly as it
-# will for users; meson, ninja and pkgconf from homebrew/core; the engine source from the formula's
-# forti-cli resource (GitHub's archive of the pinned forti-cli commit).
+# forti-api comes from the formula's forti-api resource (its release archive); meson, ninja and
+# pkgconf from homebrew/core; the engine source from the formula's forti-cli resource (GitHub's
+# archive of the pinned forti-cli commit). Like a user's first install, it runs with an empty
+# Homebrew trust store and no `brew trust`: Homebrew trusts the formula it is told to install by
+# its full name and nothing else, so the formula must not depend on any other formula from a
+# third-party tap.
 set -euo pipefail
 
 bash packaging/forti-cli-pin.sh check
@@ -21,16 +24,13 @@ version="$(vlr version show)"
 archive="$PWD/release/forti-hole-${version}.tar.gz"
 
 export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1
-brew tap valkyrianlabs/tap
-# Recent Homebrew refuses formulae from third-party taps until they are trusted; forti-hole depends on
-# valkyrianlabs/tap/forti-api, and the throwaway tap below holds the formula under test.
-trust() { if brew commands --quiet | grep -qx trust; then brew trust "$1"; fi; }
-trust valkyrianlabs/tap
+# A private, empty trust store: Homebrew keeps it in $XDG_CONFIG_HOME/homebrew when that is set.
+XDG_CONFIG_HOME="$(mktemp -d)"
+export XDG_CONFIG_HOME
 
 tap="forti-hole-ci/local"
 brew untap "$tap" >/dev/null 2>&1 || true
 brew tap-new --no-git "$tap"
-trust "$tap"
 tap_formula="$(brew --repository "$tap")/Formula/forti-hole.rb"
 trap 'brew uninstall --formula "$tap/forti-hole" >/dev/null 2>&1 || true; brew untap "$tap" >/dev/null 2>&1 || true' EXIT
 
@@ -41,6 +41,8 @@ brew style "$tap/forti-hole"
 # Then install it from the locally built archive as a bottle build and run its test block.
 sed -E "s#^  url \".*\"#  url \"file://${archive}\"#" "$formula" > "$tap_formula"
 brew install --build-bottle "$tap/forti-hole"
+# The install trusted the formula it named, and nothing else was needed.
+cat "$XDG_CONFIG_HOME/homebrew/trust.json" 2>/dev/null || true
 brew test "$tap/forti-hole"
 installed="$(brew --prefix)/bin/forti-hole"
 # The installed binary reports the engine revision the wrap pins.

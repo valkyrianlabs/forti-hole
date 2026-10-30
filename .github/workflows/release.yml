@@ -166,21 +166,15 @@ jobs:
           git clone --quiet --depth 1 --branch "$VL_RELEASE_TAG" https://github.com/valkyrianlabs/vl-release.git "$RUNNER_TEMP/vl-release"
           echo "$RUNNER_TEMP/vl-release/bin" >> "$GITHUB_PATH"
 
-      # Builds from the prepared source archive with forti-api from valkyrianlabs/tap and the engine
+      # Builds from the prepared source archive with the formula's forti-api resource and the engine
       # from the formula's forti-cli resource, then runs the formula's test block (--version and
       # --help) and the smoke test.
       - name: Install the release formula from a local tap, run its test block, make the bottle
         run: |
+          # The formula's dependencies are all in homebrew/core; a bottle build needs them installed
+          # first. Nothing from valkyrianlabs/tap is tapped or trusted: the script installs with an
+          # empty trust store, as a user would.
           brew install meson ninja pkgconf
-          # A bottle build needs its dependencies installed already; those without bottles of their
-          # own are built from source here (brew install --build-bottle refuses to do it).
-          brew tap valkyrianlabs/tap
-          if brew commands --quiet | grep -qx trust; then brew trust valkyrianlabs/tap; fi
-          HOMEBREW_NO_AUTO_UPDATE=1 brew install --build-from-source valkyrianlabs/tap/forti-api
-          # The formula under test lives in a throwaway tap; with the published one also present, `brew bottle`
-          # resolves forti-hole by bare name on some runners and stops ("found in multiple taps"). Only this
-          # runner's disposable clone of the tap is changed.
-          rm -f "$(brew --repository valkyrianlabs/tap)/Formula/forti-hole.rb"
           bash .github/scripts/homebrew-local-install.sh
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
